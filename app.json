@@ -4,33 +4,33 @@
     "slug": "RelaxMax",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
+    "icon": "./assets/icon-bg_500.png",
+    "scheme": "relaxmax",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.polecat.relaxmax",
+      "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/icon-no-bg_500.png",
+        "backgroundColor": "#3B5998"
       }
-    },
-    "web": {
-      "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#3B5998",
+          "image": "./assets/icon-no-bg_500.png",
+          "dark": {
+            "image": "./assets/icon-no-bg_500.png",
+            "backgroundColor": "#3B5998"
+          },
+          "imageWidth": 100
         }
       ]
     ],
