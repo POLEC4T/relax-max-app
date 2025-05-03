@@ -1,37 +1,80 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Text, Dimensions, TouchableOpacity, Vibration } from 'react-native';
+import { StyleSheet, View, Text, Dimensions, TouchableOpacity, Vibration, ScrollView, Modal, Alert } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
   Easing,
-  withRepeat,
-  withSequence,
   runOnJS,
   useAnimatedReaction,
   cancelAnimation,
   interpolateColor,
 } from 'react-native-reanimated';
 
+// Import des composants et utilitaires
+import PatternSelector from './components/PatternSelector';
+import PatternCustomizer from './components/PatternCustomizer';
+import { breathingPatterns, getDefaultPattern, BreathingPattern, BreathingPhase } from './types/breathingPatterns';
+import { createBreathingAnimation, stopBreathingAnimation } from './utils/breathingAnimation';
+import { getAllBreathingPatterns, saveCustomBreathingPattern, deleteCustomBreathingPattern } from './utils/storage';
+
 const { width, height } = Dimensions.get('window');
 // Durée de la session en secondes (5 minutes)
 const SESSION_DURATION = 5 * 60;
+// Durée du compte à rebours de préparation en secondes
+const PREPARATION_DURATION = 5;
 
 // Patterns de vibration (en millisecondes)
 const INHALE_VIBRATION = 10; // Vibration courte pour l'inspiration
 const EXHALE_VIBRATION = [0, 30, 30, 30]; // Vibration en deux pulsations pour l'expiration
+const COUNTDOWN_VIBRATION = 20; // Vibration pour le compte à rebours
 
 export default function Home() {
   // Animation value for the breathing circle
   const scale = useSharedValue(0.5);
-  // Track breathing state (inhale/exhale)
-  const [breathingState, setBreathingState] = useState('Inspirez');
+  // Track breathing state
+  const [currentPhase, setCurrentPhase] = useState<BreathingPhase | null>(null);
   const [progress, setProgress] = useState(0);
   // Session state
   const [isSessionActive, setIsSessionActive] = useState(false);
+  // Preparation countdown state
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [preparationCountdown, setPreparationCountdown] = useState(PREPARATION_DURATION);
   // Timer state
   const [timeRemaining, setTimeRemaining] = useState(SESSION_DURATION);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // État pour le pattern de respiration sélectionné
+  const [selectedPattern, setSelectedPattern] = useState<BreathingPattern>(getDefaultPattern());
+  // État pour l'ensemble des patterns disponibles (prédéfinis + personnalisés)
+  const [availablePatterns, setAvailablePatterns] = useState<BreathingPattern[]>(breathingPatterns);
+  
+  // État pour le modal de personnalisation
+  const [isCustomizerVisible, setIsCustomizerVisible] = useState(false);
+  const [patternToEdit, setPatternToEdit] = useState<BreathingPattern | undefined>(undefined);
+  
+  // Refs
+  interface SessionRefs {
+    timer: NodeJS.Timeout | null;
+    cleanupAnimation: (() => void) | null;
+    preparationTimer: NodeJS.Timeout | null;
+  }
+  
+  const sessionRefs = useRef<SessionRefs>({
+    timer: null,
+    cleanupAnimation: null,
+    preparationTimer: null
+  });
+  
+  // Charger tous les patterns au démarrage
+  useEffect(() => {
+    loadAllPatterns();
+  }, []);
+  
+  // Fonction pour charger tous les patterns
+  const loadAllPatterns = async () => {
+    const patterns = await getAllBreathingPatterns();
+    setAvailablePatterns(patterns);
+  };
   
   // Format time en minutes:secondes
   const formatTime = (seconds: number): string => {
@@ -41,49 +84,88 @@ export default function Home() {
   };
   
   // Fonction pour changer l'état de respiration avec vibration
-  const changeBreathingState = (state: string) => {
-    setBreathingState(state);
+  const handlePhaseChange = (phase: BreathingPhase) => {
+    setCurrentPhase(phase);
+    
+    // Annuler toute vibration en cours avant d'en lancer une nouvelle
+    Vibration.cancel();
     
     // Déclencher la vibration appropriée selon l'état
-    if (state === 'Inspirez') {
+    if (phase.name === 'Inspirez') {
       Vibration.vibrate(INHALE_VIBRATION);
-    } else if (state === 'Expirez') {
+    } else if (phase.name === 'Expirez') {
       Vibration.vibrate(EXHALE_VIBRATION);
     }
   };
   
-  // Start breathing session
-  const startSession = () => {
+  // Démarrer le compte à rebours de préparation
+  const startPreparation = () => {
+    // Réinitialiser le compte à rebours
+    setPreparationCountdown(PREPARATION_DURATION);
+    setIsPreparing(true);
+    
+    // Vibration de démarrage
+    Vibration.vibrate(COUNTDOWN_VIBRATION);
+    
+    // Démarrer le timer de préparation
+    if (sessionRefs.current.preparationTimer) {
+      clearInterval(sessionRefs.current.preparationTimer);
+    }
+    
+    sessionRefs.current.preparationTimer = setInterval(() => {
+      setPreparationCountdown(prev => {
+        const newValue = prev - 1;
+        
+        // Vibration à chaque seconde du compte à rebours
+        if (newValue > 0) {
+          Vibration.vibrate(COUNTDOWN_VIBRATION);
+        }
+        
+        // Quand le compte à rebours se termine, démarrer la session
+        if (newValue <= 0) {
+          clearInterval(sessionRefs.current.preparationTimer!);
+          sessionRefs.current.preparationTimer = null;
+          setIsPreparing(false);
+          startActualSession();
+          return 0;
+        }
+        
+        return newValue;
+      });
+    }, 1000);
+  };
+  
+  // Démarrer réellement la session une fois le compte à rebours terminé
+  const startActualSession = () => {
     // Reset state
     scale.value = 0.5;
-    setBreathingState('Inspirez');
+    setCurrentPhase(null);
     setProgress(0);
     setTimeRemaining(SESSION_DURATION);
     
-    // Start animation
-    scale.value = withRepeat(
-      withSequence(
-        // Inhale (expand) - 4 seconds
-        withTiming(1, {
-          duration: 4000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        // Exhale (contract) - 6 seconds
-        withTiming(0.5, {
-          duration: 6000,
-          easing: Easing.inOut(Easing.quad),
-        })
-      ),
-      -1, // Infinite repetitions
-      false // Don't reverse the sequence
-    );
+    // Annuler toute vibration résiduelle potentielle
+    Vibration.cancel();
     
-    // Start timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
+    // Nettoyer l'animation précédente si elle existe
+    if (sessionRefs.current.cleanupAnimation) {
+      sessionRefs.current.cleanupAnimation();
+      sessionRefs.current.cleanupAnimation = null;
     }
     
-    timerRef.current = setInterval(() => {
+    // Start animation with selected pattern
+    const cleanupAnimation = createBreathingAnimation(scale, selectedPattern, handlePhaseChange);
+    
+    // Store cleanup function for phase changes
+    if (cleanupAnimation) {
+      sessionRefs.current.cleanupAnimation = cleanupAnimation;
+    }
+    
+    // Start timer
+    if (sessionRefs.current.timer) {
+      clearInterval(sessionRefs.current.timer);
+    }
+    
+    sessionRefs.current.timer = setInterval(() => {
       setTimeRemaining(prev => {
         if (prev <= 1) {
           stopSession();
@@ -94,63 +176,76 @@ export default function Home() {
     }, 1000);
     
     setIsSessionActive(true);
-    
-    // Vibration initiale pour l'inspiration
-    Vibration.vibrate(INHALE_VIBRATION);
+  };
+  
+  // Start breathing session (initiates the preparation countdown)
+  const startSession = () => {
+    startPreparation();
   };
   
   // Stop breathing session
   const stopSession = () => {
-    // Stop animation
-    cancelAnimation(scale);
-    scale.value = withTiming(0.5, { 
-      duration: 500,
-      easing: Easing.inOut(Easing.quad)
-    });
-    
-    // Stop timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    // Arrêter le compte à rebours de préparation s'il est en cours
+    if (isPreparing && sessionRefs.current.preparationTimer) {
+      clearInterval(sessionRefs.current.preparationTimer);
+      sessionRefs.current.preparationTimer = null;
+      setIsPreparing(false);
     }
     
-    // Stop any ongoing vibration
+    // Stop any ongoing vibration FIRST to ensure it stops immediately
     Vibration.cancel();
     
+    // Clean up animation phase changes before stopping animation
+    // pour éviter que de nouvelles vibrations ne soient programmées
+    if (sessionRefs.current.cleanupAnimation) {
+      sessionRefs.current.cleanupAnimation();
+      sessionRefs.current.cleanupAnimation = null;
+    }
+    
+    // Stop animation
+    stopBreathingAnimation(scale);
+    
+    // Stop timer
+    if (sessionRefs.current.timer) {
+      clearInterval(sessionRefs.current.timer);
+      sessionRefs.current.timer = null;
+    }
+    
+    // Appeler Vibration.cancel() une deuxième fois pour s'assurer qu'aucune vibration résiduelle ne persiste
+    setTimeout(() => {
+      Vibration.cancel();
+    }, 50);
+    
     setIsSessionActive(false);
+    setCurrentPhase(null);
   };
 
   // Clean up timer on component unmount
   useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
+      if (sessionRefs.current.timer) {
+        clearInterval(sessionRefs.current.timer);
       }
+      
+      if (sessionRefs.current.preparationTimer) {
+        clearInterval(sessionRefs.current.preparationTimer);
+      }
+      
+      // Clean up animation phase changes
+      if (sessionRefs.current.cleanupAnimation) {
+        sessionRefs.current.cleanupAnimation();
+      }
+      
       // Make sure to cancel any ongoing vibration when unmounting
       Vibration.cancel();
     };
   }, []);
 
-  // Monitor the animation value to update breathing state
+  // Monitor the animation value to update progress
   useAnimatedReaction(
     () => scale.value,
     (currentValue, previousValue) => {
       if (previousValue === undefined || previousValue === null) return;
-      
-      // When we're in the first half of the animation (scale increasing)
-      if (currentValue > previousValue) {
-        // If we just switched from exhaling to inhaling
-        if (currentValue < 0.55 && previousValue <= 0.5) {
-          runOnJS(changeBreathingState)('Inspirez');
-        }
-      } 
-      // When we're in the second half (scale decreasing)
-      else if (currentValue < previousValue) {
-        // If we just switched from inhaling to exhaling
-        if (currentValue > 0.95 && previousValue >= 1) {
-          runOnJS(changeBreathingState)('Expirez');
-        }
-      }
       
       // Calculate approximate progress
       if (currentValue <= 0.5) {
@@ -169,8 +264,99 @@ export default function Home() {
     }
   );
 
-  // Determine color based on breathing state
-  const stateColor = breathingState === 'Inspirez' ? '#6ECBF5' : '#94D8B9';
+  // Determine color based on current phase
+  const stateColor = currentPhase?.color || '#6ECBF5';
+
+  // Sélectionner un nouveau pattern
+  const handleSelectPattern = (pattern: BreathingPattern) => {
+    setSelectedPattern(pattern);
+    
+    // Si une session est en cours, arrêter et redémarrer avec le nouveau pattern
+    if (isSessionActive) {
+      // Annuler toute vibration en cours
+      Vibration.cancel();
+      
+      // Nettoyer l'animation précédente
+      if (sessionRefs.current.cleanupAnimation) {
+        sessionRefs.current.cleanupAnimation();
+        sessionRefs.current.cleanupAnimation = null;
+      }
+      
+      // Stopper l'ancienne animation
+      stopBreathingAnimation(scale);
+      
+      // Démarrer la nouvelle animation avec le nouveau pattern
+      const cleanupAnimation = createBreathingAnimation(scale, pattern, handlePhaseChange);
+      
+      // Stocker la fonction de nettoyage
+      if (cleanupAnimation) {
+        sessionRefs.current.cleanupAnimation = cleanupAnimation;
+      }
+    }
+  };
+  
+  // Gérer les options du pattern (modifier, supprimer)
+  const handlePatternOptions = (pattern: BreathingPattern, action: 'edit' | 'delete') => {
+    // Ne pas permettre de modifier/supprimer les patterns prédéfinis
+    const isPredefined = breathingPatterns.some(p => p.id === pattern.id);
+    
+    if (isPredefined) {
+      Alert.alert(
+        "Action non disponible",
+        "Vous ne pouvez pas modifier ou supprimer un exercice prédéfini."
+      );
+      return;
+    }
+    
+    if (action === 'edit') {
+      setPatternToEdit(pattern);
+      setIsCustomizerVisible(true);
+    } else if (action === 'delete') {
+      Alert.alert(
+        "Supprimer l'exercice",
+        `Êtes-vous sûr de vouloir supprimer l'exercice "${pattern.name}" ?`,
+        [
+          { text: "Annuler", style: "cancel" },
+          { 
+            text: "Supprimer", 
+            style: "destructive",
+            onPress: async () => {
+              // Supprimer le pattern
+              await deleteCustomBreathingPattern(pattern.id);
+              
+              // Rafraîchir la liste
+              await loadAllPatterns();
+              
+              // Si c'était le pattern sélectionné, revenir au pattern par défaut
+              if (selectedPattern.id === pattern.id) {
+                setSelectedPattern(getDefaultPattern());
+              }
+            }
+          }
+        ]
+      );
+    }
+  };
+  
+  // Ouvrir le modal pour créer un nouveau pattern
+  const handleCreatePattern = () => {
+    setPatternToEdit(undefined);
+    setIsCustomizerVisible(true);
+  };
+  
+  // Sauvegarder un pattern personnalisé
+  const handleSavePattern = async (pattern: BreathingPattern) => {
+    await saveCustomBreathingPattern(pattern);
+    
+    // Rafraîchir la liste
+    await loadAllPatterns();
+    
+    // Sélectionner le pattern nouvellement créé/modifié
+    setSelectedPattern(pattern);
+    
+    // Fermer le modal
+    setIsCustomizerVisible(false);
+  };
 
   // Animated style for the breathing circle
   const animatedStyle = useAnimatedStyle(() => {
@@ -184,8 +370,8 @@ export default function Home() {
           [0.5, 0.75, 1],
           [
             'rgba(255, 255, 255, 0.1)', 
-            breathingState === 'Inspirez' ? 'rgba(110, 203, 245, 0.2)' : 'rgba(148, 216, 185, 0.2)',
-            breathingState === 'Inspirez' ? 'hsla(199, 87.10%, 69.60%, 0.40)' : 'rgba(148, 216, 185, 0.4)'
+            `rgba(${parseInt(stateColor.substr(1, 2), 16)}, ${parseInt(stateColor.substr(3, 2), 16)}, ${parseInt(stateColor.substr(5, 2), 16)}, 0.2)`,
+            `rgba(${parseInt(stateColor.substr(1, 2), 16)}, ${parseInt(stateColor.substr(3, 2), 16)}, ${parseInt(stateColor.substr(5, 2), 16)}, 0.4)`
           ]
         )
       : undefined;
@@ -194,7 +380,7 @@ export default function Home() {
       transform: [{ scale: scale.value }],
       backgroundColor: bgColor,
       shadowOpacity: isSessionActive ? glowOpacity : 0,
-      shadowColor: breathingState === 'Inspirez' ? '#6ECBF5' : '#94D8B9',
+      shadowColor: stateColor,
     };
   });
 
@@ -210,101 +396,167 @@ export default function Home() {
   const timerProgress = (SESSION_DURATION - timeRemaining) / SESSION_DURATION * 100;
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.guideText}>
-        RelaxMax
-      </Text>
-      
-      {/* Timer display */}
-      {isSessionActive && (
-        <View style={styles.timerContainer}>
-          <Text style={styles.timerText}>{formatTime(timeRemaining)}</Text>
-          <View style={styles.progressBarContainer}>
+    <ScrollView 
+      style={styles.scrollView}
+      contentContainerStyle={styles.scrollViewContent}
+      bounces={false}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.container}>
+        <Text style={styles.guideText}>
+          RelaxMax
+        </Text>
+        
+        {/* Timer display */}
+        {isSessionActive && (
+          <View style={styles.timerContainer}>
+            <Text style={styles.timerText}>{formatTime(timeRemaining)}</Text>
+            <View style={styles.progressBarContainer}>
+              <View 
+                style={[
+                  styles.progressBar, 
+                  { width: `${timerProgress}%` }
+                ]} 
+              />
+            </View>
+          </View>
+        )}
+        
+        {/* Affichage du compte à rebours de préparation */}
+        {isPreparing && (
+          <View style={styles.preparationOverlay}>
+            <View style={styles.preparationContainer}>
+              <Text style={styles.preparationText}>Préparez-vous</Text>
+              <Text style={styles.countdownText}>{preparationCountdown}</Text>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={stopSession}
+              >
+                <Text style={styles.cancelButtonText}>Annuler</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+        
+        {/* État de respiration au-dessus de la bulle */}
+        {isSessionActive && currentPhase && !isPreparing && (
+          <View style={styles.stateContainer}>
             <View 
               style={[
-                styles.progressBar, 
-                { width: `${timerProgress}%` }
+                styles.stateIndicator, 
+                { backgroundColor: 'rgba(255, 255, 255, 0.15)' }
+              ]}
+            >
+              <Text style={[styles.stateText, { color: currentPhase.color }]}>
+                {currentPhase.name}
+              </Text>
+            </View>
+          </View>
+        )}
+        
+        <View style={styles.animationContainer}>
+          {/* Outer glow effect */}
+          <View style={styles.glowContainer}>
+            <Animated.View 
+              style={[
+                styles.glowEffect, 
+                { backgroundColor: stateColor, opacity: isSessionActive ? 0.15 : 0 }
               ]} 
             />
           </View>
-        </View>
-      )}
-      
-      {/* État de respiration au-dessus de la bulle */}
-      {isSessionActive && (
-        <View style={styles.stateContainer}>
-          <View 
-            style={[
-              styles.stateIndicator, 
-              { backgroundColor: 'rgba(255, 255, 255, 0.15)' }
-            ]}
-          >
-            <Text style={[styles.stateText, { color: stateColor }]}>
-              {breathingState}
-            </Text>
-          </View>
-        </View>
-      )}
-      
-      <View style={styles.animationContainer}>
-        {/* Outer glow effect */}
-        <View style={styles.glowContainer}>
-          <Animated.View 
-            style={[
-              styles.glowEffect, 
-              { backgroundColor: stateColor, opacity: isSessionActive ? 0.15 : 0 }
-            ]} 
-          />
+          
+          {/* Main breathing circle */}
+          <Animated.View style={[
+            styles.circle, 
+            animatedStyle, 
+            { 
+              borderColor: isSessionActive ? stateColor : 'rgba(255, 255, 255, 0.3)',
+              borderWidth: isSessionActive ? 3 : 1,
+            }
+            
+          ]}>
+            {/* Inner decorative circles */}
+            <Animated.View style={[styles.innerCircle, innerCircleStyle]}>
+              <View style={[
+                styles.decorCircle, 
+                { backgroundColor: isSessionActive ? stateColor : 'rgba(255, 255, 255, 0.4)' }
+              ]} />
+            </Animated.View>
+          </Animated.View>
         </View>
         
-        {/* Main breathing circle */}
-        <Animated.View style={[
-          styles.circle, 
-          animatedStyle, 
-          { 
-            borderColor: isSessionActive ? stateColor : 'rgba(255, 255, 255, 0.3)',
-            borderWidth: isSessionActive ? 3 : 1,
-          }
-          
-        ]}>
-          {/* Inner decorative circles */}
-          <Animated.View style={[styles.innerCircle, innerCircleStyle]}>
-            <View style={[
-              styles.decorCircle, 
-              { backgroundColor: isSessionActive ? stateColor : 'rgba(255, 255, 255, 0.4)' }
-            ]} />
-          </Animated.View>
-        </Animated.View>
+        {/* Start/Stop button */}
+        {!isPreparing && (
+          <TouchableOpacity 
+            style={[
+              styles.button, 
+              { backgroundColor: isSessionActive ? '#d9534f' : '#5cb85c' }
+            ]} 
+            onPress={isSessionActive ? stopSession : startSession}
+          >
+            <Text style={styles.buttonText}>
+              {isSessionActive ? 'Arrêter' : 'Commencer'}
+            </Text>
+          </TouchableOpacity>
+        )}
+        
+        {isSessionActive && !isPreparing && (
+          <Text style={styles.instructionText}>
+            {selectedPattern.description}
+          </Text>
+        )}
+        
+        {/* Pattern Selector */}
+        {!isSessionActive && !isPreparing && (
+          <>
+            <PatternSelector
+              patterns={availablePatterns}
+              selectedPatternId={selectedPattern.id}
+              onSelectPattern={handleSelectPattern}
+              onPatternOptions={handlePatternOptions}
+            />
+          </>
+        )}
+        
+        {/* Modal pour le customizer de pattern */}
+        <Modal
+          visible={isCustomizerVisible}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setIsCustomizerVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <PatternCustomizer
+                initialPattern={patternToEdit}
+                onSavePattern={handleSavePattern}
+                onCancel={() => setIsCustomizerVisible(false)}
+              />
+            </View>
+          </View>
+        </Modal>
       </View>
-      
-      {/* Start/Stop button */}
-      <TouchableOpacity 
-        style={[
-          styles.button, 
-          { backgroundColor: isSessionActive ? '#d9534f' : '#5cb85c' }
-        ]} 
-        onPress={isSessionActive ? stopSession : startSession}
-      >
-        <Text style={styles.buttonText}>
-          {isSessionActive ? 'Arrêter' : 'Commencer'}
-        </Text>
-      </TouchableOpacity>
-      
-      {isSessionActive && (
-        <Text style={styles.instructionText}>
-          Inspirez 4s • Expirez 6s
-        </Text>
-      )}
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollView: {
+    flex: 1,
+    backgroundColor: '#3B5998',
+  },
+  scrollViewContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
   container: {
     flex: 1,
     backgroundColor: '#3B5998', // Bleu Facebook doux
     justifyContent: 'center',
     alignItems: 'center',
+    width: '100%',
   },
   guideText: {
     fontSize: 30,
@@ -335,6 +587,45 @@ const styles = StyleSheet.create({
   progressBar: {
     height: '100%',
     backgroundColor: 'white',
+  },
+  preparationOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  preparationContainer: {
+    padding: 30,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 20,
+    alignItems: 'center',
+  },
+  preparationText: {
+    fontSize: 24,
+    color: 'white',
+    fontWeight: '300',
+    marginBottom: 20,
+  },
+  countdownText: {
+    fontSize: 60,
+    fontWeight: 'bold',
+    color: 'white',
+    marginBottom: 20,
+  },
+  cancelButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 8,
+  },
+  cancelButtonText: {
+    color: 'white',
+    fontSize: 16,
   },
   stateContainer: {
     position: 'absolute',
@@ -415,7 +706,7 @@ const styles = StyleSheet.create({
   },
   button: {
     position: 'absolute',
-    bottom: height * 0.20,
+    bottom: height * 0.15,
     paddingHorizontal: 40,
     paddingVertical: 12,
     borderRadius: 25,
@@ -431,4 +722,30 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
-}); 
+  createPatternButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 30,
+  },
+  createPatternText: {
+    color: 'white',
+    fontWeight: '500',
+    fontSize: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 600,
+  },
+});

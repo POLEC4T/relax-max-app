@@ -37,5 +37,8 @@
     "experiments": {
       "typedRoutes": true
     }
+  },
+  "expo-router": {
+    "ignoreRoute": ["utils/**/*", "types/**/*", "components/**/*"]
   }
 }
