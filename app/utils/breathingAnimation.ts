@@ -25,71 +25,56 @@ export const createBreathingAnimation = (
     return;
   }
   
-  // Cas simple: le pattern classique inhale/exhale
-  if (pattern.id === 'default') {
-    scaleValue.value = withRepeat(
-      withSequence(
-        withTiming(1, {
-          duration: 4000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        withTiming(0.5, {
-          duration: 6000, 
-          easing: Easing.inOut(Easing.quad),
-        })
-      ),
-      -1, // Infinite repetitions
-      false // Don't reverse the sequence
+  // Créer une séquence d'animation dynamique basée sur les phases du pattern
+  const animationSequence = [];
+  
+  for (const phase of pattern.phases) {
+    const durationMs = phase.durationSeconds * 1000;
+    
+    // Déterminer la valeur d'échelle en fonction du nom de la phase
+    let targetScale = 0.5; // Taille par défaut (expiration)
+    
+    if (phase.name.toLowerCase().includes('inspir')) {
+      // Phase d'inspiration: agrandir le cercle
+      targetScale = 1;
+    } else if (phase.name.toLowerCase().includes('reten')) {
+      // Phase de rétention: maintenir la taille actuelle
+      // Si c'est après une inspiration, garder le cercle grand
+      // Si c'est après une expiration, garder le cercle petit
+      
+      // Trouver l'index de la phase actuelle
+      const currentIndex = pattern.phases.findIndex(p => p === phase);
+      const previousIndex = currentIndex > 0 ? currentIndex - 1 : pattern.phases.length - 1;
+      const previousPhase = pattern.phases[previousIndex];
+      
+      // Si la phase précédente était une inspiration, on reste grand (1)
+      // Sinon on reste petit (0.5)
+      if (previousPhase.name.toLowerCase().includes('inspir')) {
+        targetScale = 1;
+      } else {
+        targetScale = 0.5;
+      }
+    }
+    // Pour les phases d'expiration, on utilise targetScale = 0.5 (défini par défaut)
+    
+    // Ajouter cette étape à la séquence d'animation
+    animationSequence.push(
+      withTiming(targetScale, {
+        duration: durationMs,
+        easing: Easing.inOut(Easing.quad),
+      })
     );
   }
-  // Cas spécial: le pattern carré
-  else if (pattern.id === 'box') {
+  
+  // Créer et appliquer l'animation complète
+  if (animationSequence.length > 0) {
     scaleValue.value = withRepeat(
-      withSequence(
-        withTiming(1, {
-          duration: 4000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        withTiming(1, { // Rétention poumons pleins
-          duration: 4000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        withTiming(0.5, {
-          duration: 4000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        withTiming(0.5, { // Rétention poumons vides
-          duration: 4000, 
-          easing: Easing.inOut(Easing.quad),
-        })
-      ),
-      -1,
-      false
+      withSequence(...animationSequence),
+      -1, // Répétitions infinies
+      false // Ne pas inverser la séquence
     );
-  }
-  // Cas spécial: le pattern 4-7-8
-  else if (pattern.id === '478') {
-    scaleValue.value = withRepeat(
-      withSequence(
-        withTiming(1, {
-          duration: 4000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        withTiming(1, { // Rétention poumons pleins
-          duration: 7000,
-          easing: Easing.inOut(Easing.quad),
-        }),
-        withTiming(0.5, {
-          duration: 8000, 
-          easing: Easing.inOut(Easing.quad),
-        })
-      ),
-      -1,
-      false
-    );
-  }
-  // Fallback - utiliser le pattern par défaut
-  else {
+  } else {
+    // Fallback si aucune phase n'est définie
     scaleValue.value = withRepeat(
       withSequence(
         withTiming(1, {

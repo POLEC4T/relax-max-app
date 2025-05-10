@@ -10,6 +10,23 @@ import Animated, {
   cancelAnimation,
   interpolateColor,
 } from 'react-native-reanimated';
+// Importer le module Haptics
+import * as Haptics from 'expo-haptics';
+
+// Ajouter cette fonction helper en haut du composant pour convertir hex en RGB
+const hexToRgb = (hex: string) => {
+  'worklet'; // Ajout de cette directive pour transformer la fonction en worklet
+  
+  // Supprimer le # si présent
+  const cleanHex = hex.charAt(0) === '#' ? hex.substring(1) : hex;
+  
+  // Convertir hex en rgb
+  const r = parseInt(cleanHex.substring(0, 2), 16);
+  const g = parseInt(cleanHex.substring(2, 4), 16); // Correction de (2, 2) à (2, 4)
+  const b = parseInt(cleanHex.substring(4, 6), 16); // Correction de (4, 2) à (4, 6)
+  
+  return { r, g, b };
+};
 
 // Import des composants et utilitaires
 import PatternSelector from './components/PatternSelector';
@@ -104,8 +121,8 @@ export default function Home() {
     setPreparationCountdown(PREPARATION_DURATION);
     setIsPreparing(true);
     
-    // Vibration de démarrage
-    Vibration.vibrate(COUNTDOWN_VIBRATION);
+    // Retour haptique de démarrage (plus intense)
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     
     // Démarrer le timer de préparation
     if (sessionRefs.current.preparationTimer) {
@@ -116,9 +133,13 @@ export default function Home() {
       setPreparationCountdown(prev => {
         const newValue = prev - 1;
         
-        // Vibration à chaque seconde du compte à rebours
+        // Feedback haptique à chaque seconde du compte à rebours
         if (newValue > 0) {
-          Vibration.vibrate(COUNTDOWN_VIBRATION);
+          // Utiliser un retour haptique léger pour chaque seconde
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        } else {
+          // Utiliser un retour haptique plus prononcé pour le démarrage de la session
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
         
         // Quand le compte à rebours se termine, démarrer la session
@@ -190,6 +211,9 @@ export default function Home() {
       clearInterval(sessionRefs.current.preparationTimer);
       sessionRefs.current.preparationTimer = null;
       setIsPreparing(false);
+      
+      // Feedback haptique d'annulation
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
     
     // Stop any ongoing vibration FIRST to ensure it stops immediately
@@ -363,6 +387,9 @@ export default function Home() {
     // Calculate glow intensity based on scale
     const glowOpacity = (scale.value - 0.5) * 0.8 + 0.2;
     
+    // Extracting RGB components with the helper function
+    const rgb = hexToRgb(stateColor);
+    
     // Interpolate colors for gradient effect
     const bgColor = isSessionActive 
       ? interpolateColor(
@@ -370,12 +397,12 @@ export default function Home() {
           [0.5, 0.75, 1],
           [
             'rgba(255, 255, 255, 0.1)', 
-            `rgba(${parseInt(stateColor.substr(1, 2), 16)}, ${parseInt(stateColor.substr(3, 2), 16)}, ${parseInt(stateColor.substr(5, 2), 16)}, 0.2)`,
-            `rgba(${parseInt(stateColor.substr(1, 2), 16)}, ${parseInt(stateColor.substr(3, 2), 16)}, ${parseInt(stateColor.substr(5, 2), 16)}, 0.4)`
+            `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.2)`,
+            `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.4)`
           ]
         )
       : undefined;
-        
+ 
     return {
       transform: [{ scale: scale.value }],
       backgroundColor: bgColor,
@@ -464,6 +491,15 @@ export default function Home() {
               ]} 
             />
           </View>
+
+          <View style={styles.glowContainer}>
+            <Animated.View 
+              style={[
+                styles.lilGlowEffect, 
+                { backgroundColor: stateColor, opacity: isSessionActive ? 0.15 : 0, }
+              ]} 
+            />
+          </View>
           
           {/* Main breathing circle */}
           <Animated.View style={[
@@ -485,6 +521,19 @@ export default function Home() {
           </Animated.View>
         </View>
         
+        
+        {/* Pattern Selector */}
+        {!isSessionActive && !isPreparing && (
+          <>
+            <PatternSelector
+              patterns={availablePatterns}
+              selectedPatternId={selectedPattern.id}
+              onSelectPattern={handleSelectPattern}
+              onPatternOptions={handlePatternOptions}
+            />
+          </>
+        )}
+
         {/* Start/Stop button */}
         {!isPreparing && (
           <TouchableOpacity 
@@ -506,17 +555,6 @@ export default function Home() {
           </Text>
         )}
         
-        {/* Pattern Selector */}
-        {!isSessionActive && !isPreparing && (
-          <>
-            <PatternSelector
-              patterns={availablePatterns}
-              selectedPatternId={selectedPattern.id}
-              onSelectPattern={handleSelectPattern}
-              onPatternOptions={handlePatternOptions}
-            />
-          </>
-        )}
         
         {/* Modal pour le customizer de pattern */}
         <Modal
@@ -628,9 +666,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   stateContainer: {
-    position: 'absolute',
-    top: height * 0.28,
+    // position: 'absolute',
+    // top: height * 0.28,
     alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
   },
   animationContainer: {
     position: 'relative',
@@ -646,7 +686,15 @@ const styles = StyleSheet.create({
     width: width * 0.7,
     height: width * 0.7,
     borderRadius: width * 0.425,
+
     opacity: 0.2,
+  },
+
+  lilGlowEffect: {
+    width: width * 0.35,
+    height: width * 0.35,
+    borderRadius: width * 0.425,
+
   },
   circle: {
     width: width * 0.7,
@@ -689,7 +737,7 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '300',
     position: 'absolute',
-    bottom: height * 0.10,
+    bottom: height * 0.05,
     opacity: 0.8,
   },
   stateIndicator: {
@@ -705,8 +753,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   button: {
-    position: 'absolute',
-    bottom: height * 0.15,
+    // position: 'absolute',
+    // bottom: height * 0.10,
     paddingHorizontal: 40,
     paddingVertical: 12,
     borderRadius: 25,
@@ -716,6 +764,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
+    marginTop: 20,
   },
   buttonText: {
     color: 'white',
@@ -727,10 +776,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 25,
-    marginTop: 20,
+    // marginTop: 20,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.3)',
-    marginBottom: 30,
+    // marginBottom: 30,
   },
   createPatternText: {
     color: 'white',
