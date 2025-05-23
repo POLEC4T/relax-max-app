@@ -17,7 +17,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon-no-bg_500.png",
         "backgroundColor": "#3B5998"
-      }
+      },
+      "package": "com.polecat.relaxmax"
     },
     "plugins": [
       "expo-router",
@@ -36,9 +37,22 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "94c93b4c-a879-4463-89ad-309d1e3b45bf"
+      }
+    },
+    "owner": "evilryu117"
   },
   "expo-router": {
-    "ignoreRoute": ["utils/**/*", "types/**/*", "components/**/*"]
+    "ignoreRoute": [
+      "utils/**/*",
+      "types/**/*",
+      "components/**/*"
+    ]
   }
 }
